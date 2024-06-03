@@ -13,6 +13,15 @@ namespace SCHALE.Common.Database
     
     }
 
+    public struct RaidDamage
+    {
+        public long GivenDamage { get; set; }
+
+        public long GivenGroggyPoint { get; set; }
+
+        public int Index { get; set; }
+    }
+
     public struct RaidBossResult : IEquatable<RaidBossResult>
     {
         [JsonIgnore]
@@ -24,7 +33,7 @@ namespace SCHALE.Common.Database
         [JsonIgnore]
         public long GivenGroggyPoint { get; set; }
 
-        //public RaidDamage RaidDamage { get; set; }
+        public RaidDamage RaidDamage { get; set; }
 
         public long EndHpRateRawValue { readonly get; set; }
 
@@ -323,7 +332,7 @@ namespace SCHALE.Common.Database
     {
         [JsonIgnore]
         public virtual ICollection<ItemDB> Items { get; }
-
+        
         [JsonIgnore]
         public virtual ICollection<CharacterDB> Characters { get; }
         
@@ -351,19 +360,9 @@ namespace SCHALE.Common.Database
         [JsonIgnore]
         public virtual RaidInfo RaidInfo { get; set; }
 
-        public AccountDB() { 
-            Items = new List<ItemDB>();
-            Characters = new List<CharacterDB>();
-            MissionProgresses = new List<MissionProgressDB>();
-            Echelons = new List<EchelonDB>();
-            Equipment = new List<EquipmentDB>();
-            Weapons = new List<WeaponDB>();
-            Gears = new List<GearDB>();
-            MemoryLobbies = new List<MemoryLobbyDB>();
-            Scenarios = new List<ScenarioHistoryDB>();
-        }
+        public AccountDB() { }
 
-        public AccountDB(long publisherAccountId) : this()
+        public AccountDB(long publisherAccountId)
         {
             PublisherAccountId = publisherAccountId;
             State = AccountState.Normal;
@@ -814,7 +813,7 @@ namespace SCHALE.Common.Database
         public long CharacterDBId { get; set; }
         public EchelonType EchelonType { get; set; }
         public int SlotNumber { get; set; }
-        //public AssistRelation AssistRelation { get; set; }
+        public AssistRelation AssistRelation { get; set; }
         public int EchelonSlotType { get; set; }
         public int EchelonSlotIndex { get; set; }
         public long DecodedShardId { get; set; }
@@ -1949,13 +1948,14 @@ namespace SCHALE.Common.Database
 
     public class RaidMemberCollection : KeyedCollection<long, RaidMemberDescription>
     {
-        public long TotalDamage { get; set; }
+        public long TotalDamage { get => RaidDamages.Sum(x => x.GivenDamage); }
 
         protected override long GetKeyForItem(RaidMemberDescription item)
         {
-            return -1;
+            return item.AccountId;
         }
-        //public IEnumerable<RaidDamage> RaidDamages { get; set; }
+
+        public IEnumerable<RaidDamage> RaidDamages { get; set; }
     }
 
     public class RaidBattleDB
@@ -1968,7 +1968,7 @@ namespace SCHALE.Common.Database
         public long CurrentBossAIPhase { get; set; }
         public string BIEchelon { get; set; }
         public bool IsClear { get; set; }
-        public RaidMemberCollection RaidMembers { get; set; }
+        public RaidMemberCollection RaidMembers { get; set; } = new();
         public List<long> SubPartsHPs { get; set; }
     }
 
@@ -1996,6 +1996,24 @@ namespace SCHALE.Common.Database
         public long CostumeId { get; set; }
     }
 
+    public class RaidDamageCollection : KeyedCollection<int, RaidDamage>
+    {
+        protected override int GetKeyForItem(RaidDamage item)
+        {
+            return item.Index;
+        }
+
+        public long CurrentDamage { get; set; }
+
+        public long CurrentGroggyPoint { get; set; }
+
+        public int MaxIndex { get; set; }
+
+        public long TotalDamage { get; set; }
+
+        public long TotalGroggyPoint { get; set; }
+    }
+
     public class RaidMemberDescription : IEquatable<RaidMemberDescription>
     {
         public long AccountId { get; set; }
@@ -2003,6 +2021,12 @@ namespace SCHALE.Common.Database
         public string AccountName { get; set; }
 
         public long CharacterId { get; set; }
+
+        public RaidDamageCollection DamageCollection { get; set; } = new();
+
+        public long DamageGiven { get; set; }
+
+        public long GroggyGiven { get; set; }
 
         public bool Equals(RaidMemberDescription? other)
         {
@@ -2030,7 +2054,7 @@ namespace SCHALE.Common.Database
         public RaidStatus RaidState { get; set; }
         public bool IsPractice { get; set; }
         public List<RaidBossDB> RaidBossDBs { get; set; }
-        public Dictionary<long, List<long>> ParticipateCharacterServerIds { get; set; }
+        public Dictionary<long, List<long>> ParticipateCharacterServerIds { get; set; } = new();
         public bool IsEnterRoom { get; set; }
         public long SessionHitPoint { get; set; }
         public long AccountLevelWhenCreateDB { get; set; }

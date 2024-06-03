@@ -3,6 +3,7 @@ using SCHALE.Common.FlatData;
 using SCHALE.Common.NetworkProtocol;
 using SCHALE.GameServer.Managers;
 using SCHALE.GameServer.Services;
+using Serilog;
 
 namespace SCHALE.GameServer.Controllers.Api.ProtocolHandlers
 {
@@ -34,19 +35,25 @@ namespace SCHALE.GameServer.Controllers.Api.ProtocolHandlers
             };
         }
 
-        [ProtocolHandler(Protocol.Raid_CreateBattle)]
+        [ProtocolHandler(Protocol.Raid_CreateBattle)] // only called when fresh new raid created
         public ResponsePacket CreateBattleHandler(RaidCreateBattleRequest req)
         {
             var account = sessionKeyService.GetAccount(req.SessionKey);
+            
+            var raidStageExcel = excelTableService.GetTable<RaidStageExcelTable>().UnPack().DataList;
+            var bossStatsExcel = excelTableService.GetTable<CharacterStatExcelTable>().UnPack().DataList;
+
+            var currentRaidExcel = raidStageExcel.FirstOrDefault(x => x.Id == req.RaidUniqueId);
+            var currentBossExcel = bossStatsExcel.FirstOrDefault(x => x.CharacterId == currentRaidExcel.RaidCharacterId);
 
             account.RaidInfo.CurrentRaidUniqueId = req.RaidUniqueId;
             account.RaidInfo.CurrentDifficulty = req.Difficulty;
 
             context.Entry(account).Property(x => x.RaidInfo).IsModified = true; // force update
             context.SaveChanges();
-
-            var raid = RaidManager.Instance.CreateRaid(account.RaidInfo, account.ServerId, account.Nickname, req.IsPractice, req.RaidUniqueId);
-            var battle = RaidManager.Instance.CreateBattle(account.ServerId, account.Nickname, req.RaidUniqueId);
+            
+            var raid = RaidManager.Instance.CreateRaid(account, currentBossExcel, req.IsPractice);
+            var battle = RaidManager.Instance.CreateBattle(account);
 
             return new RaidCreateBattleResponse()
             {
@@ -59,10 +66,20 @@ namespace SCHALE.GameServer.Controllers.Api.ProtocolHandlers
         [ProtocolHandler(Protocol.Raid_EnterBattle)] // clicked restart
         public ResponsePacket EnterBattleHandler(RaidEnterBattleRequest req)
         {
+            var account = sessionKeyService.GetAccount(req.SessionKey);
+
             var raid = RaidManager.Instance.RaidDB;
             var battle = RaidManager.Instance.RaidBattleDB;
 
-            return new RaidEnterBattleResponse()
+            var currentTeam = account.Echelons.Where(x => x.EchelonType == EchelonType.Raid && x.EchelonNumber == req.EchelonId)
+                                              .FirstOrDefault();
+
+            if (!raid.ParticipateCharacterServerIds.ContainsKey(account.ServerId))
+                raid.ParticipateCharacterServerIds.Add(account.ServerId, new());
+
+            raid.ParticipateCharacterServerIds[account.ServerId] = currentTeam.MainSlotServerIds.Concat(currentTeam.SupportSlotServerIds).ToList();
+
+            return new RaidEnterBattleResponse() 
             {
                 RaidDB = raid,
                 RaidBattleDB = battle,
@@ -89,14 +106,12 @@ namespace SCHALE.GameServer.Controllers.Api.ProtocolHandlers
             context.Entry(account).Property(x => x.RaidInfo).IsModified = true; // force update
             context.SaveChanges();
 
-            // saving battle result to continue on next attempt doesn't work
-            var battle = RaidManager.Instance.RaidBattleDB;
-            var bossResult = req.Summary.RaidSummary.RaidBossResults.FirstOrDefault();
+            bool raidDone = RaidManager.Instance.EndBattle(account, req.Summary.RaidSummary.RaidBossResults.FirstOrDefault());
 
-            battle.CurrentBossHP = bossResult.EndHpRateRawValue;
-            battle.CurrentBossGroggy = bossResult.GroggyRateRawValue;
-            battle.CurrentBossAIPhase = bossResult.AIPhase;
-            battle.SubPartsHPs = bossResult.SubPartsHPs;
+            if (!raidDone)
+                return new RaidEndBattleResponse();
+
+            RaidManager.Instance.FinishRaid(account.RaidInfo);
 
             return new RaidEndBattleResponse()
             {
@@ -105,6 +120,25 @@ namespace SCHALE.GameServer.Controllers.Api.ProtocolHandlers
                 ClearTimePoint = timeScore,
                 HPPercentScorePoint = hpPercentScorePoint,
                 DefaultClearPoint = defaultClearPoint
+            };
+        }
+
+        [ProtocolHandler(Protocol.Raid_GiveUp)]
+        public ResponsePacket GiveUpHandler(RaidGiveUpRequest req)
+        {
+            var account = sessionKeyService.GetAccount(req.SessionKey);
+
+            RaidManager.Instance.FinishRaid(account.RaidInfo);
+
+            return new RaidGiveUpResponse()
+            {
+                Tier = 0,
+                RaidGiveUpDB = new()
+                {
+                    Ranking = 0,
+                    RankingPoint = 0,
+                    BestRankingPoint = account.RaidInfo.BestRankingPoint
+                }
             };
         }
 

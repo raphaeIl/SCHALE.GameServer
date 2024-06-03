@@ -1,4 +1,5 @@
-﻿using SCHALE.Common.Database;
+﻿using Castle.Core.Logging;
+using SCHALE.Common.Database;
 using SCHALE.Common.FlatData;
 using SCHALE.Common.NetworkProtocol;
 using SCHALE.GameServer.Controllers.Api.ProtocolHandlers;
@@ -20,29 +21,32 @@ namespace SCHALE.GameServer.Managers
             {
                 RaidLobbyInfoDB = new SingleRaidLobbyInfoDB()
                 {
+                    SeasonId = raidInfo.SeasonId,
                     Tier = 0,
                     Ranking = 1,
-                    SeasonId = raidInfo.SeasonId,
-                    BestRankingPoint = 0,
-                    TotalRankingPoint = 0,
-                    ReceiveRewardIds = targetSeasonData.SeasonRewardId,
+                    BestRankingPoint = raidInfo.BestRankingPoint,
+                    TotalRankingPoint = raidInfo.TotalRankingPoint,
+                    ReceiveRewardIds = [],
                     PlayableHighestDifficulty = new()
                     {
                         { targetSeasonData.OpenRaidBossGroup.FirstOrDefault(), Difficulty.Torment }
-                    }
+                    },
+
+                    PlayingRaidDB = RaidDB,
                 };
-            } 
+            }
             
             else
             {
                 RaidLobbyInfoDB.BestRankingPoint = raidInfo.BestRankingPoint;
                 RaidLobbyInfoDB.TotalRankingPoint = raidInfo.TotalRankingPoint;
+                RaidLobbyInfoDB.PlayingRaidDB = RaidDB;
             }
 
             return RaidLobbyInfoDB;
         }
 
-        public RaidDB CreateRaid(RaidInfo raidInfo, long ownerId, string ownerNickname, bool isPractice, long raidId)
+        public RaidDB CreateRaid(AccountDB account, CharacterStatExcelT bossData, bool isPractice)
         {
             if (RaidDB == null)
             {
@@ -50,48 +54,56 @@ namespace SCHALE.GameServer.Managers
                 {
                     Owner = new()
                     {
-                        AccountId = ownerId,
-                        AccountName = ownerNickname,
+                        AccountId = account.ServerId,
+                        AccountName = account.Nickname,
                     },
 
                     ContentType = ContentType.Raid,
-                    UniqueId = raidId,
-                    SeasonId = raidInfo.SeasonId,
+                    ServerId = 1,
+                    UniqueId = account.RaidInfo.CurrentRaidUniqueId,
+                    SeasonId = account.RaidInfo.SeasonId,
+                    Begin = DateTime.UtcNow,
+                    End = DateTime.UtcNow.AddDays(2), // idk jp server time or whatever but if this is is wrong it breaks
+                    PlayerCount = 1,
+                    SecretCode = "0",
                     RaidState = RaidStatus.Playing,
                     IsPractice = isPractice,
-                    BossDifficulty = raidInfo.CurrentDifficulty,
                     RaidBossDBs = [
                         new() {
                             ContentType = ContentType.Raid,
-                            BossCurrentHP = long.MaxValue
+                            BossCurrentHP = bossData.MaxHP100,
+                            BossGroggyPoint = bossData.GroggyGauge
                         }
                     ],
+
+                    AccountLevelWhenCreateDB = account.Level
                 };
             }
 
             else
             {
-                RaidDB.BossDifficulty = raidInfo.CurrentDifficulty;
-                RaidDB.UniqueId = raidId;
+                RaidDB.BossDifficulty = account.RaidInfo.CurrentDifficulty;
+                RaidDB.UniqueId = account.RaidInfo.CurrentRaidUniqueId;
                 RaidDB.IsPractice = isPractice;
             }
 
             return RaidDB;
         }
 
-        public RaidBattleDB CreateBattle(long ownerId, string ownerNickname, long raidId)
+        public RaidBattleDB CreateBattle(AccountDB account)
         {
             if (RaidBattleDB == null)
             {
                 RaidBattleDB = new()
                 {
                     ContentType = ContentType.Raid,
-                    RaidUniqueId = raidId,
-                    CurrentBossHP = long.MaxValue,
+                    RaidUniqueId = account.RaidInfo.CurrentRaidUniqueId,
+                    CurrentBossHP = this.RaidDB.RaidBossDBs.FirstOrDefault().BossCurrentHP,
+                    CurrentBossGroggy = this.RaidDB.RaidBossDBs.FirstOrDefault().BossGroggyPoint,
                     RaidMembers = [
                         new() {
-                            AccountId = ownerId,
-                            AccountName = ownerNickname,
+                            AccountId = account.ServerId,
+                            AccountName = account.Nickname,
                         }
                     ]
                 };
@@ -99,10 +111,45 @@ namespace SCHALE.GameServer.Managers
 
             else
             {
-                RaidBattleDB.RaidUniqueId = raidId;
+                RaidBattleDB.RaidUniqueId = account.RaidInfo.CurrentRaidUniqueId;
             }
 
             return RaidBattleDB;
+        }
+
+        public bool EndBattle(AccountDB account, RaidBossResult bossResult)
+        {
+            var battle = Instance.RaidBattleDB;
+            var raid = Instance.RaidDB;
+
+            battle.CurrentBossHP -= bossResult.RaidDamage.GivenDamage;
+            battle.CurrentBossGroggy -= bossResult.RaidDamage.GivenGroggyPoint;
+            battle.CurrentBossAIPhase = bossResult.AIPhase;
+            battle.SubPartsHPs = bossResult.SubPartsHPs;
+
+            raid.RaidBossDBs.FirstOrDefault().BossCurrentHP = battle.CurrentBossHP;
+            raid.RaidBossDBs.FirstOrDefault().BossGroggyPoint = battle.CurrentBossGroggy;
+
+            RaidMemberDescription raidMember = RaidBattleDB.RaidMembers[account.ServerId]; // no checks, guaranteed exists since it is add in Raid_CreateBattle
+
+            raidMember.DamageCollection.Add(new()
+            {
+                Index = raidMember.DamageCollection.Count,
+                GivenDamage = bossResult.RaidDamage.GivenDamage,
+                GivenGroggyPoint = bossResult.RaidDamage.GivenGroggyPoint
+            });
+
+            return battle.CurrentBossHP <= 0;
+        }
+
+        public void FinishRaid(RaidInfo raidInfo)
+        {
+            RaidLobbyInfoDB.BestRankingPoint = raidInfo.BestRankingPoint;
+            RaidLobbyInfoDB.TotalRankingPoint = raidInfo.TotalRankingPoint;
+            RaidLobbyInfoDB.PlayingRaidDB = null;
+
+            RaidDB = null;
+            RaidBattleDB = null;
         }
 
         public static long CalculateTimeScore(float duration, Difficulty difficulty)

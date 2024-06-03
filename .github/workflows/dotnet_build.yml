@@ -5,9 +5,9 @@ name: Build
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "raid" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "raid" ]
 
 jobs:
   build_linux:

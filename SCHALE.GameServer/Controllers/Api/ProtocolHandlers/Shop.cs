@@ -5,6 +5,7 @@ using SCHALE.Common.NetworkProtocol;
 using SCHALE.Common.Utils;
 using SCHALE.GameServer.Services;
 using SCHALE.GameServer.Utils;
+using Serilog;
 
 namespace SCHALE.GameServer.Controllers.Api.ProtocolHandlers
 {
@@ -242,72 +243,26 @@ namespace SCHALE.GameServer.Controllers.Api.ProtocolHandlers
                 }
             }
 
-            using var transaction = _context.Database.BeginTransaction();
+            account.AddCharacters(_context, [.. gachaList.Where(x => x.Character != null).Select(x => x.Character)]);
 
-            try
+            var acquiredItems = new List<ItemDB>();
+
+            acquiredItems = itemDict.Keys.Select(x => new ItemDB()
             {
-                // add characters
-                _context.Characters.AddRange(
-                    gachaList.Where(x => x.Character != null)
-                            .Select(x => x.Character)!);
+                IsNew = true,
+                UniqueId = x,
+                StackCount = itemDict[x],
+            }).ToList();
 
-                // create if item does not exist
-                foreach (var id in itemDict.Keys)
-                {
-                    var itemExists = _context.Items
-                        .Any(x => x.AccountServerId == account.ServerId && x.UniqueId == id);
-                    if (!itemExists)
-                    {
-                        _context.Items.Add(new ItemDB()
-                        {
-                            IsNew = true,
-                            UniqueId = id,
-                            StackCount = 0,
-                            AccountServerId = account.ServerId,
-                        });
-                    }
-                }
-                _context.SaveChanges();
-
-                // perform item count update
-                foreach (var (id, count) in itemDict)
-                {
-                    _context.Items
-                        .Where(x => x.AccountServerId == account.ServerId && x.UniqueId == id)
-                        .ExecuteUpdate(setters => setters.SetProperty(
-                            item => item.StackCount, item => item.StackCount + count));
-                }
-
-                _context.SaveChanges();
-
-                transaction.Commit();
-
-                _context.Entry(account).Collection(x => x.Items).Reload();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError("Transaction failed: {Message}", ex.Message);
-                throw;
-            }
-
-            var itemDbList = itemDict.Keys
-                .Select(id => _context.Items.AsNoTracking().First(x => x.AccountServerId == account.ServerId && x.UniqueId == id))
-                .ToList();
-            foreach (var gacha in gachaList)
-            {
-                if (gacha.Stone != null)
-                {
-                    gacha.Stone.ServerId = itemDbList.First(x => x.UniqueId == gacha.Stone.UniqueId).ServerId;
-                }
-            }
+            account.AddItems(_context, [.. acquiredItems]);
+            _context.SaveChanges();
 
             return new ShopBuyGacha3Response()
             {
                 GachaResults = gachaList,
-                UpdateTime = DateTime.UtcNow,
                 GemBonusRemain = int.MaxValue,
                 ConsumedItems = [],
-                AcquiredItems = itemDbList,
+                AcquiredItems = acquiredItems,
                 MissionProgressDBs = [],
             };
         }

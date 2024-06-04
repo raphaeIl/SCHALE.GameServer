@@ -46,7 +46,17 @@
             foreach (var item in items)
             {
                 item.AccountServerId = account.ServerId;
-                context.Items.Add(item);
+
+                var existingItem = account.Items.FirstOrDefault(x => x.UniqueId == item.UniqueId);
+
+                if (existingItem != null)
+                {
+                    existingItem.StackCount += item.StackCount;
+                    item.ServerId = existingItem.ServerId;
+                } else
+                    context.Items.Add(item);
+
+                context.SaveChanges();
             }
 
             return [.. items];
